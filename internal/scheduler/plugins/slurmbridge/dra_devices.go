@@ -9,10 +9,15 @@ import (
 	"maps"
 	"slices"
 
+	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/klog/v2"
+	podv1 "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
 )
 
 type claimDevice struct{ driver, pool, device string }
@@ -119,4 +124,41 @@ func (sb *SlurmBridge) patchClaimAllocation(ctx context.Context, claim, toUpdate
 		}
 	}
 	return err
+}
+
+// deletePreemptedHolder deletes the bridge pod that holds claim once that
+// pod's Slurm job has stopped running, as the pod controller would on its next
+// job-cache refresh. Slurm has already given the device to another job, so
+// deleting the pod now frees the device for the waiting pod sooner.
+func (sb *SlurmBridge) deletePreemptedHolder(ctx context.Context, claim *resourcev1.ResourceClaim) {
+	logger := klog.FromContext(ctx)
+	for _, ref := range claim.Status.ReservedFor {
+		if ref.APIGroup != "" || ref.Resource != "pods" {
+			continue
+		}
+		pod := &corev1.Pod{}
+		if err := sb.Get(ctx, client.ObjectKey{Namespace: claim.Namespace, Name: ref.Name}, pod); err != nil {
+			if !apierrors.IsNotFound(err) {
+				logger.Error(err, "failed to get pod holding a device", "pod", klog.KRef(claim.Namespace, ref.Name))
+			}
+			continue
+		}
+		if pod.UID != ref.UID || pod.DeletionTimestamp != nil || podv1.IsPodTerminal(pod) ||
+			pod.Spec.SchedulerName != sb.schedulerName || pod.Labels[wellknown.LabelExternalJobId] == "" {
+			continue
+		}
+		running, err := sb.slurmControl.IsJobRunning(ctx, pod)
+		if err != nil {
+			logger.Error(err, "failed to check the Slurm job of a pod holding a device", "pod", klog.KObj(pod))
+			continue
+		}
+		if running {
+			continue
+		}
+		logger.Info("Deleting pod whose Slurm job ended while it still holds a device",
+			"pod", klog.KObj(pod), "jobId", pod.Labels[wellknown.LabelExternalJobId], "claim", klog.KObj(claim))
+		if err := sb.Delete(ctx, pod, client.Preconditions{UID: &pod.UID}); err != nil && !apierrors.IsNotFound(err) {
+			logger.Error(err, "failed to delete pod holding a device", "pod", klog.KObj(pod))
+		}
+	}
 }

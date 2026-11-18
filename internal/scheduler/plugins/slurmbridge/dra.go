@@ -194,6 +194,9 @@ func (sb *SlurmBridge) bindClaim(
 	}
 
 	if err := sb.patchClaimAllocation(ctx, claim, toUpdate); err != nil {
+		if held, ok := errors.AsType[*deviceHeldError](err); ok {
+			sb.deletePreemptedHolder(ctx, held.holder)
+		}
 		return fmt.Errorf("failed to add reservation to claim %s status: %w", klog.KObj(claim), err)
 	}
 
