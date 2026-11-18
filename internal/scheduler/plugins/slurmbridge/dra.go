@@ -193,7 +193,7 @@ func (sb *SlurmBridge) bindClaim(
 		{Resource: "pods", Name: pod.Name, UID: pod.UID},
 	}
 
-	if err := sb.Status().Patch(ctx, toUpdate, client.StrategicMergeFrom(claim)); err != nil {
+	if err := sb.patchClaimAllocation(ctx, claim, toUpdate); err != nil {
 		return fmt.Errorf("failed to add reservation to claim %s status: %w", klog.KObj(claim), err)
 	}
 
