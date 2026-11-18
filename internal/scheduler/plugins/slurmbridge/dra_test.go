@@ -1099,6 +1099,11 @@ func TestSlurmBridge_bindClaim(t *testing.T) {
 			sb := &SlurmBridge{
 				Client: tt.kclient,
 			}
+			// bindClaim receives the claim as Create returned it.
+			stored := &resourcev1.ResourceClaim{}
+			if err := tt.kclient.Get(context.Background(), client.ObjectKeyFromObject(tt.claim), stored); err == nil {
+				tt.claim.ResourceVersion = stored.ResourceVersion
+			}
 			gotErr := sb.bindClaim(context.Background(), tt.claim, tt.pod, tt.nodeName, tt.resources)
 			if gotErr != nil {
 				if !tt.wantErr {

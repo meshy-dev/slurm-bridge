@@ -11,9 +11,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	schedulingv1alpha2 "k8s.io/api/scheduling/v1alpha2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,7 +87,7 @@ func init() {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;patch;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;patch;watch;delete
 // +kubebuilder:rbac:groups="",resources=pods/finalizers,verbs=patch
 // +kubebuilder:rbac:groups="",resources=pods/status,verbs=patch
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
@@ -127,9 +129,13 @@ func init() {
 // Slurmbridge is a plugin that schedules pods in a group.
 type SlurmBridge struct {
 	client.Client
-	schedulerName string
-	slurmControl  slurmcontrol.SlurmControlInterface
-	handle        fwk.Handle
+	// claimMu serializes claim allocation writes with their ownership check.
+	claimMu sync.Mutex
+	// uncertainClaims holds allocation writes whose outcome is unknown, keyed by claimOwner.
+	uncertainClaims map[string]*resourcev1.ResourceClaim
+	schedulerName   string
+	slurmControl    slurmcontrol.SlurmControlInterface
+	handle          fwk.Handle
 	// gpuTypeMap maps a Slurm GPU GRES type name (e.g. "nvidia_b200" from
 	// AutoDetect=nvidia) to a Kubernetes DRA DeviceClass name (e.g.
 	// "gpu.nvidia.com"). Empty entries fall back to using the GRES type as the

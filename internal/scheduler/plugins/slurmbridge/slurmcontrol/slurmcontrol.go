@@ -35,6 +35,8 @@ type SlurmControlInterface interface {
 	DeleteJob(ctx context.Context, pod *corev1.Pod) error
 	GetJobsForPods(ctx context.Context) (*map[string]ExternalJob, error)
 	GetJob(ctx context.Context, pod *corev1.Pod) (*ExternalJob, error)
+	// IsJobRunning reports from a live read whether the pod's Slurm job is running.
+	IsJobRunning(ctx context.Context, pod *corev1.Pod) (bool, error)
 	SubmitJob(ctx context.Context, pod *corev1.Pod, slurmJobIR *slurmjobir.SlurmJobIR) (int32, error)
 	UpdateJob(ctx context.Context, pod *corev1.Pod, slurmJobIR *slurmjobir.SlurmJobIR) (int32, error)
 	IsSlurmNode(ctx context.Context, node string) (bool, error)
@@ -75,6 +77,23 @@ func sharedFromExclusiveAnnotation(slurmJobIR *slurmjobir.SlurmJobIR) *[]api.V00
 		return &[]api.V0044JobDescMsgShared{api.V0044JobDescMsgSharedNone}
 	}
 	return &[]api.V0044JobDescMsgShared{}
+}
+
+// IsJobRunning implements SlurmControlInterface. A pod without a job, or whose
+// job Slurm no longer knows, is not running.
+func (r *realSlurmControl) IsJobRunning(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	jobId := object.ObjectKey(pod.Labels[wellknown.LabelExternalJobId])
+	if jobId == "" {
+		return false, nil
+	}
+	job := &slurmtypes.V0044JobInfo{}
+	if err := r.Get(ctx, jobId, job, &client.GetOptions{SkipCache: true}); err != nil {
+		if utils.IsSlurmJobNotFoundErr(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return job.GetStateAsSet().Has(api.V0044JobInfoJobStateRUNNING), nil
 }
 
 // DeleteSlurmJob will delete an external job
